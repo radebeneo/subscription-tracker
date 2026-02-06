@@ -26,13 +26,15 @@ export const sendReminders  = serve(async(context) => {
     for(const daysBefore of REMINDERS) {
         const reminderDate = renewalDate.subtract(daysBefore, 'day')
 
-        console.log(`Checking reminder for ${daysBefore} days before (Date: ${reminderDate.format()}, Current: ${dayjs().format()})`)
 
         if(reminderDate.isAfter(dayjs())) {
             await sleepUntilReminder(context, `${daysBefore} days before`, reminderDate)
         }
 
-        await triggerReminder(context, `${daysBefore} days before reminder`, subscription)
+        if(dayjs().isSame(reminderDate, 'day')) {
+            await triggerReminder(context, `${daysBefore} days before reminder`, subscription)
+        }
+
     }
 })
 
@@ -48,9 +50,9 @@ const sleepUntilReminder = async (context, label, date) => {
 }
 
 const triggerReminder = async (context, label, subscription) => {
-    console.log(`Entering triggerReminder for ${label}`);
+
     return await context.run(label, async () => {
-        console.log(`Triggering ${label} reminder`);
+        console.log(`Triggering ${label}`);
 
         await sendReminderEmail({
             to: subscription.user.email,
