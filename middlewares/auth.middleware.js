@@ -4,26 +4,57 @@ import User from "../models/user.model.js";
 
 const authorize = async (req, res, next) => {
     try{
-        let token
+        const authHeader = req.headers.authorization;
 
-        if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
-            token = req.headers.authorization.split(' ')[1]
+        if (!authHeader) {
+            const error = new Error('Authentication required');
+            error.statusCode = 401;
+            return next(error);
         }
 
-        if (!token) res.status(401).json({message: 'Unauthorized'})
+        if (!authHeader.startsWith('Bearer ')) {
+            const error = new Error('Invalid or expired token');
+            error.statusCode = 401;
+            return next(error);
+        }
 
-        const decoded = jwt.verify(token, JWT_SECRET)
+        const token = authHeader.slice(7).trim();
+
+        if (!token) {
+            const error = new Error('Invalid or expired token');
+            error.statusCode = 401;
+            return next(error);
+        }
+
+        let decoded;
+        try {
+            decoded = jwt.verify(token, JWT_SECRET)
+        } catch {
+            const authError = new Error('Invalid or expired token');
+            authError.statusCode = 401;
+            return next(authError);
+        }
+
+        if (!decoded || !decoded.userId) {
+            const error = new Error('Invalid or expired token');
+            error.statusCode = 401;
+            return next(error);
+        }
 
         const user = await User.findById(decoded.userId)
 
-        if (!user) res.status(401).json({message: 'Unauthorized'})
+        if (!user) {
+            const error = new Error('Authentication failed: user not found');
+            error.statusCode = 401;
+            return next(error);
+        }
 
         req.user = user
 
-        next()
+        return next()
 
-    } catch(error){
-        res.status(401).json({message: 'Unauthorized', error: error.message})
+    } catch (authError) {
+        return next(authError)
     }
 }
 

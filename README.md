@@ -94,8 +94,8 @@ The **Subscription Tracker API** is a comprehensive solution for users to manage
 - `POST /api/v1/auth/sign-in`: Login user
 
 ### Users
-- `GET /api/v1/users`: Get all users
-- `GET /api/v1/users/:id`: Get specific user details
+- `GET /api/v1/users`: Intentionally unavailable. User enumeration is disabled to prevent cross-account data exposure; this route responds with `404`.
+- `GET /api/v1/users/:id`: Get the authenticated user's own profile details only.
 
 ### Subscriptions
 - `POST /api/v1/subscriptions`: Create a new subscription

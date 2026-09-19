@@ -24,6 +24,20 @@ const userSchema = new mongoose.Schema({
     }
 },{ timestamps: true });
 
+export const serializeUser = (user) => {
+    if (!user) return null;
+
+    const source = typeof user.toObject === 'function' ? user.toObject() : { ...user };
+
+    return {
+        _id: source._id,
+        name: source.name,
+        email: source.email,
+        createdAt: source.createdAt,
+        updatedAt: source.updatedAt,
+    };
+};
+
 const User = mongoose.model('User', userSchema);
 
 export default User;
