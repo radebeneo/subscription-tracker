@@ -1,7 +1,12 @@
 # CONTRACT-01: Clerk Identity and Owned Subscriptions
 
-**Revision:** 2  
-**Status:** Owner-approved design; implementation pending credential configuration facts
+**Revision:** 2.2
+**Status:** Owner-approved design clarification; implementation pending credential configuration facts
+
+Revision 2.2 narrows section 10 for the API-02 implementation unit and defines
+stable database-read error envelopes for the integrated endpoints. It does not
+change the owner-approved identity, provisioning, or subscription decisions in
+revision 2.
 
 This is the canonical contract for the API and Expo repositories. It records the approved first Clerk slice and does not authorize runtime changes by itself. Existing development data must be preserved.
 
@@ -90,7 +95,7 @@ Requires a valid Clerk bearer credential. It verifies the credential and reads t
 {"success": true, "data": {"provider": "clerk", "clerkUserId": "user_2abc123", "userId": "665f000000000000000001", "provisioned": true}}
 ```
 
-An authenticated but unprovisioned identity returns `200` with `userId: null` and `provisioned: false`. Credential and dependency errors are `401 AUTH_INVALID` or `503 AUTH_PROVIDER_UNAVAILABLE` as defined above.
+An authenticated but unprovisioned identity returns `200` with `userId: null` and `provisioned: false`. Credential and dependency errors are `401 AUTH_INVALID` or `503 AUTH_PROVIDER_UNAVAILABLE` as defined above. If the identity database read fails, return `500` with `IDENTITY_RESOLUTION_FAILED` and the stable error envelope defined in section 12.
 
 ### `POST /api/v1/identity/provision`
 
@@ -106,9 +111,15 @@ Creation is `201`; an unchanged idempotent repeat is `200`. Errors are `400 REQU
 
 This existing route is Clerk-only for the integrated flow. It accepts only a valid Clerk bearer credential, resolves the Clerk subject, requires an existing inline association, and requires `:id` to equal the associated API `userId`. Legacy JWTs and all legacy auth endpoints are outside the Expo flow and are not alternative credentials for this route. There is no dual-verifier fallback.
 
-An authenticated but unprovisioned Clerk identity returns `403 IDENTITY_NOT_PROVISIONED`; it does not create a user or call profile provisioning. A malformed route ID returns `422 INVALID_USER_ID`; a valid but mismatched ID returns `403 NOT_OWNER`; a missing/invalid credential returns `401 AUTH_INVALID`; verification infrastructure failure returns `503 AUTH_PROVIDER_UNAVAILABLE`; a missing associated API user returns `404 USER_NOT_FOUND`.
+An authenticated but unprovisioned Clerk identity returns `403 IDENTITY_NOT_PROVISIONED`; it does not create a user or call profile provisioning. A malformed route ID returns `422 INVALID_USER_ID`; a valid but mismatched ID returns `403 NOT_OWNER`; a missing/invalid credential returns `401 AUTH_INVALID`; verification infrastructure failure returns `503 AUTH_PROVIDER_UNAVAILABLE`; a missing associated API user returns `404 USER_NOT_FOUND`. If the subscription database read fails, return `500` with `SUBSCRIPTIONS_READ_FAILED` and the stable error envelope defined in section 12.
 
 ## 6. Owned-subscription-list DTO
+
+The DTO enum values are explicit and remain authoritative from the current
+model: `currency` is `USD | GBP | ZAR`; `frequency` is `daily | weekly | monthly
+| yearly`; `category` is `sports | news | entertainment | education | health |
+others`; and `status` is `active | cancelled | expired`. `paymentMethod` remains
+a required string and is not an enum in the current model.
 
 An authorized request returns `200`:
 
@@ -135,6 +146,11 @@ An authorized request returns `200`:
 
 `workflowRunId` is intentionally excluded. `renewalDate` is nullable for legacy records. IDs are strings, dates are UTC ISO 8601 strings, and the current model enums remain authoritative. The complete list is ordered by `createdAt` descending then `_id` descending; an empty list is `200` with `data: []`. A safely unrepresentable legacy record returns `500 DATA_INTEGRITY_ERROR` and no partial list. Database failures are not converted to an empty list.
 
+For the integrated endpoints in sections 5 and 6, a database read failure is a
+server-side failure and must not be reported as an empty result, an identity
+absence, or a client credential failure. The stable `500` error envelopes are
+defined in section 12.
+
 ## 7. Workflow terminology
 
 The subscription reminder integration uses Upstash QStash as the delivery/orchestration service and `@upstash/workflow` as the server SDK. `workflowRunId` is an internal persistence value used by the existing reminder trigger; it is not a Clerk credential, Clerk session, or public integrated list field. This contract does not change QStash callback verification or reminder behavior.
@@ -155,13 +171,74 @@ These are implementation facts, not architecture decisions:
 
 ## 10. API-02 implementation plan
 
-1. Add the pinned jose dependency and configuration validation without installing it as part of this contract task.
-2. Implement one Clerk verifier with strict claims policy and the `401` versus `503` distinction above.
-3. Add the inline `User` fields and partial unique association index, preserving legacy records and conditional password behavior.
-4. Add read-only identity resolution and empty-body provisioning with validated Clerk profile retrieval, transaction/index concurrency handling, and exact error envelopes.
-5. Migrate `GET /api/v1/subscriptions/user/:id` to Clerk-only authorization and map records to the DTO without `workflowRunId`.
-6. Add focused tests for credentials, key retrieval outcomes, provisioning races/conflicts, unprovisioned list access, serialization, rollback behavior, and DTO ordering.
+API-02 is limited to the Clerk authentication boundary:
+
+1. Add the pinned jose dependency and verifier-only configuration validation.
+2. Implement one Clerk verifier with strict, policy-configurable claims and the `401` versus `503` distinction above.
+3. Add the verifier middleware boundary and expose only the verified provider subject for later identity resolution. Do not treat it as a MongoDB user ID.
+4. Add isolated verifier tests using generated keys and mocked JWKS behavior.
+
+API-03 covers inline `User` association, identity resolution, provisioning,
+profile retrieval, and their database-read/write error envelopes. API-04 covers
+the Clerk-only subscription-route migration and the owned-subscription-list DTO.
+Neither API-03 nor API-04 is part of API-02, and API-02 must not add their
+schemas, endpoints, profile calls, route changes, or database reads.
+
+The ordinary Clerk session-token claim shape and live credential policy remain
+unverified. In particular, this contract does not assert values for audience,
+authorized party, algorithm, issuer, clock skew, or JWKS refresh settings. Live
+authentication remains blocked until those configuration facts are confirmed;
+isolated tests may use an explicit test-only policy.
 
 ## 11. Acceptance record
 
 The implementation is accepted only when it proves: no email-only linking; no fake passwords; empty-body rejection of unexpected provisioning fields; idempotent and concurrent-safe provisioning; no profile synchronization on repeat; Clerk-only subscription-list authentication; `403 IDENTITY_NOT_PROVISIONED`; exact error envelopes/statuses; `workflowRunId` omission; no token/secret leakage; and preservation of development users, associations, and subscriptions during rollback.
+
+## 12. Revision 2.2: database-read error envelopes
+
+The following approved clarification defines endpoint behavior for API-03 and
+API-04. It does not authorize route changes, schema changes, or implementation
+in API-02.
+
+### Stable envelopes
+
+If identity resolution cannot complete because its database read fails, return
+`500` with this stable envelope:
+
+```json
+{
+  "success": false,
+  "code": "IDENTITY_RESOLUTION_FAILED",
+  "message": "Identity resolution failed"
+}
+```
+
+If the owned-subscription listing cannot complete because its database read
+fails, return `500` with this stable envelope:
+
+```json
+{
+  "success": false,
+  "code": "SUBSCRIPTIONS_READ_FAILED",
+  "message": "Subscriptions could not be read"
+}
+```
+
+These codes must not replace `PROVISIONING_FAILED` for provisioning
+database failures or `DATA_INTEGRITY_ERROR` for subscription records that are
+safely unrepresentable. Database failures must not become an empty result,
+identity absence, or credential failure.
+
+### Clarification for `USER_NOT_FOUND`
+
+With the inline `User` association, an authenticated subject with no matching
+provider association remains the ordinary unprovisioned result and must not
+become `USER_NOT_FOUND`. `USER_NOT_FOUND` may occur only
+after an inline association has identified the API user and the endpoint then
+finds that associated user document missing, or after an equivalent detected
+association inconsistency. It must not introduce a second identity store,
+email-based linking, or a different ordinary unprovisioned outcome.
+
+The envelopes and this `USER_NOT_FOUND` clarification are approved in revision
+2.2. Their implementation belongs to the endpoint owners identified in
+section 10 and does not expand API-02 scope.
